@@ -1,60 +1,137 @@
-function empty() {}
+const STATE = {
+  FULFILLED: "fulfilled",
+  REJECTED: "rejected",
+  PENDING: "pending",
+}
 
 class PromiseMe {
-  constructor(executor) {
-    this.queue = [];
-    this.errorHandler = empty;
-    this.finallyHandler = empty;
+  thenCbs = []
+  catchCbs = []
+  state = STATE.PENDING
+  value
+  onSuccessBind = this.onSuccess.bind(this)
+  onFailBind = this.onFail.bind(this)
 
+  constructor(cb) {
     try {
-      executor.call(null, this.onResolve.bind(this), this.onReject.bind(this));
+      cb(this.onSuccessBind, this.onFailBind)
     } catch (e) {
-      this.errorHandler(e);
-    } finally {
-      this.finallyHandler();
+      this.onFail(e)
     }
   }
 
-  onResolve(data) {
-    this.queue.forEach((callback) => {
-      data = callback(data);
-    });
+  runCallbacks() {
+    if (this.state === STATE.FULFILLED) {
+      this.thenCbs.forEach(callback => {
+        callback(this.value)
+      })
 
-    this.finallyHandler();
+      this.thenCbs = []
+    }
+
+    if (this.state === STATE.REJECTED) {
+      this.catchCbs.forEach(callback => {
+        callback(this.value)
+      })
+
+      this.catchCbs = []
+    }
   }
 
-  onReject(error) {
-    this.errorHandler(error);
+  onSuccess(value) {
+    queueMicrotask(() => {
+      if (this.state !== STATE.PENDING) return
 
-    this.finallyHandler();
+      if (value instanceof PromiseMe) {
+        value.then(this.onSuccessBind, this.onFailBind)
+        return
+      }
+
+      this.value = value
+      this.state = STATE.FULFILLED
+      this.runCallbacks()
+    })
   }
 
-  then(fn) {
-    this.queue.push(fn);
-    return this;
+  onFail(value) {
+    queueMicrotask(() => {
+      if (this.state !== STATE.PENDING) return
+
+      if (value instanceof PromiseMe) {
+        value.then(this.onSuccessBind, this.onFailBind)
+        return
+      }
+
+      if (this.catchCbs.length === 0) {
+        throw new UncaughtPromiseError(value)
+      }
+
+      this.value = value
+      this.state = STATE.REJECTED
+      this.runCallbacks()
+    })
   }
 
-  catch(fn) {
-    this.errorHandler = fn;
-    return this;
+  then(thenCb, catchCb) {
+    return new PromiseMe((resolve, reject) => {
+      this.thenCbs.push(result => {
+        if (thenCb == null) {
+          resolve(result)
+          return
+        }
+
+        try {
+          resolve(thenCb(result))
+        } catch (error) {
+          reject(error)
+        }
+      })
+
+      this.catchCbs.push(result => {
+        if (catchCb == null) {
+          reject(result)
+          return
+        }
+
+        try {
+          resolve(catchCb(result))
+        } catch (error) {
+          reject(error)
+        }
+      })
+
+      this.runCallbacks()
+    })
   }
 
-  finally(fn) {
-    this.finallyHandler = fn;
-    return this;
+  catch(cb) {
+    return this.then(undefined, cb)
+  }
+
+  finally(cb) {
+    return this.then(
+      result => {
+        cb()
+        return result
+      },
+      result => {
+        cb()
+        throw result
+      }
+    )
   }
 
   static resolve(value) {
-    return new Promise((resolve) => {
-      resolve(value);
-    });
+    return new Promise(resolve => {
+      resolve(value)
+    })
   }
 
   static reject(value) {
     return new Promise((resolve, reject) => {
-      reject(value);
-    });
+      reject(value)
+    })
   }
 }
 
-module.exports = PromiseMe;
+module.exports = PromiseMe
